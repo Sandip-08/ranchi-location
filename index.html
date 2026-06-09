@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ranchi Municipal Corporation - Interactive Ward Boundary Map + Upload</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <!-- Proj4js for coordinate conversion -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.15.0/proj4.js"></script>
+  
+  <!-- Shapefile / GeoJSON parsing -->
+  <script src="https://unpkg.com/shapefile@0.6.6/dist/shapefile.js"></script>
+  <script src="https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.min.js"></script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- External CSS & JS -->
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans min-h-screen flex flex-col overflow-x-hidden">
+
+  <header class="bg-slate-950 border-b border-slate-800 px-6 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 shrink-0 z-20">
+    <div>
+      <div class="flex items-center gap-2">
+        <span class="p-1.5 bg-emerald-500/10 text-emerald-400 rounded-lg"><i data-lucide="layers" class="w-6 h-6"></i></span>
+        <h1 class="text-xl font-bold tracking-tight text-white">RMC Ward-Level Interactive Map</h1>
+      </div>
+      <p class="text-xs text-slate-400 mt-1">Upload your own Shapefile/GeoJSON → auto-projected to WGS84</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <button onclick="openModal('embed-guide')" class="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold px-4 py-2 rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+        <i data-lucide="help-circle" class="w-4 h-4"></i> Guide
+      </button>
+      <button onclick="copyEmbedCode()" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-lg shadow-emerald-900/20 transition flex items-center gap-1.5">
+        <i data-lucide="copy" class="w-4 h-4"></i> Copy Embed Code
+      </button>
+    </div>
+  </header>
+
+  <div class="flex-1 flex flex-col lg:flex-row min-h-0 relative">
+    <aside class="w-full lg:w-[420px] bg-slate-950 border-r border-slate-800 flex flex-col min-h-0 shrink-0 z-10 overflow-y-auto custom-scrollbar">
+      
+      <!-- Stats Panel -->
+      <div class="p-4 border-b border-slate-800 bg-slate-900/50 space-y-3">
+        <div class="text-[11px] uppercase tracking-wider font-semibold text-slate-400">Dataset Stats</div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="p-3 bg-slate-900 border border-emerald-500/20 rounded-lg">
+            <div class="text-[10px] uppercase tracking-wider text-emerald-400 font-bold">Loaded Wards</div>
+            <div class="text-lg font-bold text-white mt-0.5" id="featureCount">0</div>
+            <div class="text-[9px] text-slate-400 mt-0.5">from default/upload</div>
+          </div>
+          <div class="p-3 bg-slate-900 border border-cyan-500/20 rounded-lg">
+            <div class="text-[10px] uppercase tracking-wider text-cyan-400 font-bold">Original SRS</div>
+            <div class="text-lg font-bold text-slate-300 mt-0.5">Auto-detected</div>
+            <div class="text-[9px] text-slate-400 mt-0.5">converted to WGS84</div>
+          </div>
+        </div>
+        <button onclick="zoomToAllWards()" class="w-full bg-emerald-950/40 hover:bg-emerald-900/40 text-emerald-400 border border-emerald-500/30 text-xs py-2 rounded font-medium transition flex items-center justify-center gap-1">
+          <i data-lucide="maximize" class="w-3.5 h-3.5"></i> Zoom to Layer
+        </button>
+      </div>
+
+      <!-- File Upload Section -->
+      <div class="p-5 border-b border-slate-800">
+        <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2 mb-3">
+          <i data-lucide="upload" class="w-4 h-4 text-amber-500"></i> Upload Your Own Map
+        </h2>
+        <div id="dropzone" class="dropzone border-2 border-dashed border-slate-700 rounded-xl p-6 text-center cursor-pointer hover:border-emerald-500 transition bg-slate-900/40">
+          <i data-lucide="cloud-upload" class="w-8 h-8 mx-auto text-slate-500 mb-2"></i>
+          <p class="text-xs text-slate-400">Drag & drop or click to upload</p>
+          <p class="text-[10px] text-slate-500 mt-1">Supports .geojson, .shp (with .shx, .dbf in same zip), or .zip</p>
+          <input type="file" id="fileInput" accept=".geojson,.json,.shp,.zip" class="hidden" />
+        </div>
+        <div id="uploadStatus" class="mt-2 text-xs text-slate-400 hidden"></div>
+        <button id="clearUploadBtn" onclick="clearUploadedLayer()" class="mt-3 w-full bg-red-950/40 hover:bg-red-900/40 text-red-400 border border-red-500/30 text-xs py-1.5 rounded hidden transition">
+          <i data-lucide="trash-2" class="w-3.5 h-3.5 inline mr-1"></i> Remove Uploaded Layer
+        </button>
+      </div>
+
+      <!-- Ward Selector -->
+      <div class="p-5 space-y-6">
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+            <i data-lucide="map-pin" class="w-4 h-4 text-emerald-400"></i> Ward Selector
+          </h2>
+          <div class="space-y-3 bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+            <select id="wardSelector" onchange="focusSelectWard(this.value)" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200">
+              <option value="">-- Choose a Ward --</option>
+            </select>
+            <div id="wardDetailsCard" class="hidden p-3 bg-slate-950 rounded-lg border border-slate-800 space-y-2">
+              <div class="flex justify-between items-center border-b border-slate-800 pb-1.5">
+                <span class="text-xs font-bold text-emerald-400" id="detailWardNo">Ward No: --</span>
+                <span class="text-[10px] px-2 py-0.5 bg-slate-800 rounded text-slate-400" id="detailCity">Ranchi</span>
+              </div>
+              <div><span class="text-slate-500 text-[10px]">Area</span><span class="font-semibold text-slate-200 ml-2" id="detailArea">0.00 km²</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Visual Settings -->
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+            <i data-lucide="sliders" class="w-4 h-4 text-cyan-400"></i> Map Settings
+          </h2>
+          <div class="space-y-3 bg-slate-900/60 p-4 rounded-xl border border-slate-800 text-xs">
+            <select id="mapColorMode" onchange="changeColorMode(this.value)" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5">
+              <option value="distinct">Distinct Colors</option>
+              <option value="solid">Single Outline</option>
+            </select>
+            <div>
+              <div class="flex justify-between mb-1"><span>Transparency</span><span id="transparencyVal">30%</span></div>
+              <input type="range" id="wardOpacitySlider" min="0" max="100" value="30" oninput="changeWardOpacity(this.value)" class="w-full accent-cyan-500">
+            </div>
+            <div class="flex items-center gap-3"><input type="checkbox" id="toggleWards" checked onchange="toggleWardLayer(this.checked)"> <span>Show Ward Layer</span></div>
+            <div class="flex items-center gap-3"><input type="checkbox" id="toggleLabels" checked onchange="toggleLabelLayer(this.checked)"> <span>Show Labels</span></div>
+          </div>
+        </div>
+
+        <!-- Export -->
+        <div class="space-y-3">
+          <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider flex items-center gap-2">
+            <i data-lucide="database" class="w-4 h-4 text-amber-500"></i> Export GeoJSON (WGS84)
+          </h2>
+          <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800">
+            <div class="flex justify-between mb-2">
+              <span class="text-xs">Converted Data</span>
+              <button onclick="copyConvertedGeoJSON()" class="text-emerald-400 text-xs">Copy</button>
+            </div>
+            <textarea id="geojsonExportBox" readonly class="w-full h-24 bg-slate-950 border border-slate-800 rounded-lg p-2 font-mono text-[10px] text-slate-400"></textarea>
+            <button onclick="downloadConvertedGeoJSON()" class="mt-2 w-full bg-slate-800 hover:bg-slate-700 text-xs py-1.5 rounded">Download WGS84 GeoJSON</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="flex-1 relative">
+      <div class="absolute top-4 left-4 z-[1000] bg-slate-950/90 border border-slate-800 rounded-lg px-3 py-2 text-xs">
+        <span>Lat: <span id="coordLat">---</span> Lng: <span id="coordLng">---</span></span>
+      </div>
+      <div class="absolute top-4 right-4 z-[1000] bg-slate-950/95 border border-slate-800 rounded-xl p-2.5 w-44 shadow-2xl">
+        <div class="text-[10px] font-bold text-slate-400 mb-2">Basemap</div>
+        <div class="space-y-1">
+          <button onclick="setBasemap('streets')" id="btn-bm-streets" class="w-full text-left px-2 py-1.5 rounded-lg bg-emerald-900/40 text-emerald-400 border border-emerald-500/30 text-xs">OSM Streets</button>
+          <button onclick="setBasemap('dark')" id="btn-bm-dark" class="w-full text-left px-2 py-1.5 rounded-lg text-slate-400 hover:bg-slate-900 text-xs">Dark Canvas</button>
+          <button onclick="setBasemap('satellite')" id="btn-bm-satellite" class="w-full text-left px-2 py-1.5 rounded-lg text-slate-400 hover:bg-slate-900 text-xs">Satellite</button>
+        </div>
+      </div>
+      <div id="map" class="w-full h-full bg-slate-950"></div>
+    </main>
+  </div>
+
+  <!-- Modals & Toast -->
+  <div id="embed-guide" class="fixed inset-0 bg-black/75 flex items-center justify-center p-4 hidden z-[9999]">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6">
+      <h3 class="text-lg font-bold mb-2">Embed Instructions</h3>
+      <p class="text-sm text-slate-300">Click "Copy Embed Code" → Paste into Google Sites "Embed" block.</p>
+      <button onclick="closeModal('embed-guide')" class="mt-4 bg-emerald-600 px-4 py-2 rounded text-white">Close</button>
+    </div>
+  </div>
+  <div id="toast" class="fixed bottom-6 right-6 z-[99999] bg-emerald-600 text-white text-xs py-2 px-4 rounded-xl shadow-2xl transition-all duration-300 transform translate-y-20 opacity-0 pointer-events-none">Copied!</div>
+</body>
+</html>
